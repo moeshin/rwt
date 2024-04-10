@@ -151,15 +151,19 @@ fn get_io_speed(size: u128, nanos: u128) -> String {
 struct Cli {
     #[arg(short, long, help = "Input file")]
     input: Option<String>,
-    #[arg(short, long, help = "Output file. Output to memory by default")]
+    #[arg(short, long, help = "Output file. Output to memory by default.")]
     output: Option<String>,
     #[arg(
         short,
         long,
+        value_name = "CONTENT",
         value_enum,
         requires = "output",
         default_missing_value = "text",
-        help = "Generate and then output"
+        help = "Generate output content.
+If it is random type, all generated into memory first;
+and if count is 0, memory size only is buffer size.
+"
     )]
     generator: Option<Generator>,
     #[arg(
@@ -178,14 +182,21 @@ struct Cli {
 ",
     )]
     buffer_size: Byte,
-    #[arg(short, long, default_value_t = 0)]
+    #[arg(
+        short,
+        long,
+        default_value_t = 0,
+        help = "Buffer count.
+0: Read and write until EOF or SIGINT.
+"
+    )]
     count: u64,
     #[arg(
         long,
         exclusive = true,
         value_name = "SHELL",
         value_enum,
-        help = "Print shell completion script"
+        help = "Print shell completion script\n"
     )]
     completion: Option<Shell>,
     #[arg(short, long, exclusive = true, action = ArgAction::Version, help = "Print version")]
