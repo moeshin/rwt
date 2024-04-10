@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{self, Read, Write},
+    process::exit,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,7 +12,9 @@ use std::{
 
 use byte_unit::{Bit, Byte, UnitType};
 use clap::{
-    builder::ValueParser, error::Result, ArgAction, ArgGroup, CommandFactory, Parser, ValueEnum,
+    builder::ValueParser,
+    error::Result,
+    ArgAction, CommandFactory, Parser, ValueEnum,
 };
 use clap_complete::{generate, Shell};
 use rand::Rng;
@@ -28,11 +31,6 @@ fn parse_buffer_size_var(s: &str) -> Result<Byte, ErrorBox> {
     if size == 0 {
         Err("Buffer size must not be 0")?;
     }
-    println!(
-        "Buffer size: {size} Byte ({:#}, {:#})",
-        b.get_appropriate_unit(UnitType::Binary),
-        b.get_appropriate_unit(UnitType::Decimal),
-    );
     Ok(b)
 }
 
@@ -113,10 +111,9 @@ impl Read for MemoryGenerator {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Hash, Copy, Clone, ValueEnum)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, ValueEnum)]
 enum Generator {
     // Printable characters
-    #[default]
     Text,
     // Null characters
     Null,
@@ -146,7 +143,6 @@ fn get_io_speed(size: u128, nanos: u128) -> String {
     long_about,
     next_line_help = true,
     disable_version_flag = true,
-    groups = [ArgGroup::new("input_group").args(["input", "generator"]).required(true)],
 )]
 struct Cli {
     #[arg(short, long, help = "Input file")]
@@ -156,10 +152,10 @@ struct Cli {
     #[arg(
         short,
         long,
-        value_name = "CONTENT",
         value_enum,
+        value_name = "CONTENT",
+        conflicts_with = "input",
         requires = "output",
-        default_missing_value = "text",
         help = "Generate output content.
 If it is random type, all generated into memory first;
 and if count is 0, memory size only is buffer size.
@@ -194,8 +190,8 @@ and if count is 0, memory size only is buffer size.
     #[arg(
         long,
         exclusive = true,
-        value_name = "SHELL",
         value_enum,
+        value_name = "SHELL",
         help = "Print shell completion script\n"
     )]
     completion: Option<Shell>,
@@ -207,12 +203,25 @@ and if count is 0, memory size only is buffer size.
 
 fn main() {
     let cli = Cli::parse();
+    let cmd = &mut Cli::command();
 
     if let Some(shell) = cli.completion {
-        let cmd = &mut Cli::command();
         generate(shell, cmd, cmd.get_name().to_string(), &mut io::stdout());
         return;
     }
+
+    if cli.input.is_none() && cli.generator.is_none() {
+        eprintln!("No input source\n");
+        cmd.print_long_help().unwrap();
+        exit(1);
+    }
+
+    println!(
+        "Buffer size: {} Byte ({:#}, {:#})",
+        cli.buffer_size.as_u128(),
+        cli.buffer_size.get_appropriate_unit(UnitType::Binary),
+        cli.buffer_size.get_appropriate_unit(UnitType::Decimal),
+    );
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
