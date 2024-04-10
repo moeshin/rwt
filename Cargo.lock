@@ -497,7 +497,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rw-test"
+name = "rwt"
 version = "0.1.0"
 dependencies = [
  "byte-unit",
