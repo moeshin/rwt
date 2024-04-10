@@ -93,7 +93,7 @@ impl Read for MemoryGenerator {
         let buffer_size = buf.len();
         let mut readed_size = 0usize;
 
-        while self.circular && readed_size < buffer_size {
+        while readed_size < buffer_size {
             let mut remaining_size = data_size - self.index;
             if remaining_size == 0 {
                 self.index = 0;
@@ -106,6 +106,9 @@ impl Read for MemoryGenerator {
             }
             self.index += remaining_size;
             readed_size += remaining_size;
+            if !self.circular {
+                break;
+            }
         }
         Ok(readed_size)
     }
