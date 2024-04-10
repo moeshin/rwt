@@ -1,16 +1,20 @@
 use std::{
-    fs::OpenOptions,
+    fs::File,
     io::{self, Read, Write},
     str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Instant,
 };
 
 use byte_unit::{Bit, Byte, UnitType};
 use clap::{
-    builder::ValueParser, error::Result, ArgAction, Args, CommandFactory, Parser, Subcommand,
-    ValueEnum,
+    builder::ValueParser, error::Result, ArgAction, ArgGroup, CommandFactory, Parser, ValueEnum,
 };
 use clap_complete::{generate, Shell};
+use rand::Rng;
 
 type ErrorBox = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -32,8 +36,132 @@ fn parse_buffer_size_var(s: &str) -> Result<Byte, ErrorBox> {
     Ok(b)
 }
 
-#[derive(Args, Debug, PartialEq)]
-struct CommonArgs {
+struct AsciiGenerator {
+    // Range: [0, 94] 0..95
+    index: u8,
+}
+
+impl AsciiGenerator {
+    fn new() -> Self {
+        AsciiGenerator { index: 0 }
+    }
+}
+
+impl Read for AsciiGenerator {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let len = buf.len();
+        for i in 0..len {
+            buf[i] = 0x20 + self.index;
+            self.index = if self.index < 94 { self.index + 1 } else { 0 }
+        }
+        Ok(len)
+    }
+}
+
+struct NullGenerator {}
+
+impl NullGenerator {
+    fn new() -> Self {
+        NullGenerator {}
+    }
+}
+
+impl Read for NullGenerator {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // buf.fill(0);
+        Ok(buf.len())
+    }
+}
+
+struct MemoryGenerator {
+    data: Vec<u8>,
+    index: usize,
+    circular: bool,
+}
+
+impl MemoryGenerator {
+    fn new(bytes: Vec<u8>, circular: bool) -> Self {
+        MemoryGenerator {
+            data: bytes,
+            index: 0,
+            circular,
+        }
+    }
+}
+
+impl Read for MemoryGenerator {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let data_size = self.data.len();
+        let buffer_size = buf.len();
+        let mut readed_size = 0usize;
+
+        while self.circular && readed_size < buffer_size {
+            let mut remaining_size = data_size - self.index;
+            if remaining_size == 0 {
+                self.index = 0;
+            } else {
+                remaining_size = buffer_size - readed_size;
+            }
+
+            for i in 0..remaining_size {
+                buf[readed_size + i] = self.data[self.index + i];
+            }
+            self.index += remaining_size;
+            readed_size += remaining_size;
+        }
+        Ok(readed_size)
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash, Copy, Clone, ValueEnum)]
+enum Generator {
+    // Printable characters
+    #[default]
+    Text,
+    // Null characters
+    Null,
+    // Random bytes
+    Random,
+    // Random printable characters
+    RandomText,
+}
+
+fn get_io_speed(size: u128, nanos: u128) -> String {
+    let b = size * 1_000_000_000 / nanos;
+    let bit = Bit::from_u128(b * 8).unwrap();
+    let b = Byte::from_u128(b).unwrap();
+    format!(
+        "{:#.2}/s, {:#.2}/s, {:#.2}/s, {:#.2}/s",
+        b.get_appropriate_unit(UnitType::Binary),
+        b.get_appropriate_unit(UnitType::Decimal),
+        bit.get_appropriate_unit(UnitType::Binary),
+        bit.get_appropriate_unit(UnitType::Decimal),
+    )
+}
+
+#[derive(Parser, Debug, PartialEq)]
+#[command(
+    version,
+    about,
+    long_about,
+    next_line_help = true,
+    disable_version_flag = true,
+    groups = [ArgGroup::new("input_group").args(["input", "generator"]).required(true)],
+)]
+struct Cli {
+    #[arg(short, long, help = "Input file")]
+    input: Option<String>,
+    #[arg(short, long, help = "Output file. Output to memory by default")]
+    output: Option<String>,
+    #[arg(
+        short,
+        long,
+        value_enum,
+        requires = "output",
+        default_missing_value = "text",
+        help = "Generate and then output"
+    )]
+    generator: Option<Generator>,
     #[arg(
         short,
         long,
@@ -47,76 +175,20 @@ struct CommonArgs {
         help = "Buffer size, like:
 1 KiB = 1 Ki = 1024 Bytes
 1 KB  = 1 K  = 1000 Bytes
-"
+",
     )]
     buffer_size: Byte,
     #[arg(short, long, default_value_t = 0)]
     count: u64,
-}
-
-impl CommonArgs {
-    fn create_buffer(&self) -> Vec<u8> {
-        vec![0; self.buffer_size.as_u128() as usize]
-    }
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Hash, Copy, Clone, ValueEnum)]
-enum WriteSrc {
-    #[default]
-    Ascii,
-    Random,
-    Null,
-}
-
-#[derive(Subcommand, Debug, PartialEq)]
-enum Commands {
-    #[command(about = "Read file to memory")]
-    Read {
-        #[arg(help = "Input file")]
-        file: String,
-
-        #[command(flatten)]
-        common: CommonArgs,
-    },
-    #[command(about = "Write to file. First generate it into memory")]
-    Write {
-        #[arg(help = "Output file")]
-        file: String,
-        #[arg(short, long, value_enum)]
-        src: WriteSrc,
-
-        #[command(flatten)]
-        common: CommonArgs,
-    },
-    #[command(about = "Copy file")]
-    Copy {
-        #[arg(short, long)]
-        input: String,
-        #[arg(short, long)]
-        output: String,
-
-        #[command(flatten)]
-        common: CommonArgs,
-    },
-    #[command(about = "Print shell completion script")]
-    Completion {
-        #[arg(value_name = "SHELL", value_enum)]
-        shell: Shell,
-    },
-}
-
-#[derive(Parser, Debug, PartialEq)]
-#[command(
-    version,
-    about,
-    long_about,
-    next_line_help = true,
-    disable_version_flag = true
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-    #[arg(short, long, action = ArgAction::Version, help = "Print version")]
+    #[arg(
+        long,
+        exclusive = true,
+        value_name = "SHELL",
+        value_enum,
+        help = "Print shell completion script"
+    )]
+    completion: Option<Shell>,
+    #[arg(short, long, exclusive = true, action = ArgAction::Version, help = "Print version")]
     version: Option<bool>,
     #[arg(short = 'V', long, global = true, help = "Verbose mode")]
     verbose: bool,
@@ -125,51 +197,100 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    match &cli.command {
-        Commands::Completion { shell } => {
-            let cmd = &mut Cli::command();
-            generate(*shell, cmd, cmd.get_name().to_string(), &mut io::stdout());
-        }
-        Commands::Read { file, common } => {
-            let mut buffer = common.create_buffer();
-            let mut file = OpenOptions::new().read(true).open(file).unwrap();
-            let mut size = 0u128;
-            let instant = Instant::now();
-            loop {
-                let s = file.read(buffer.by_ref()).unwrap();
-                if s == 0 {
-                    break;
+    if let Some(shell) = cli.completion {
+        let cmd = &mut Cli::command();
+        generate(shell, cmd, cmd.get_name().to_string(), &mut io::stdout());
+        return;
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    let buffer_size = cli.buffer_size.as_u128();
+    let buffer_size_usize = buffer_size as usize;
+    let final_size = cli.count as u128 * buffer_size;
+    let mut input: Box<dyn Read> = match cli.input {
+        Some(input) => Box::new(File::open(input).unwrap()),
+        None => {
+            let generator = cli.generator.unwrap();
+            let mut generate_instant = None;
+            if match generator {
+                Generator::Random | Generator::RandomText => true,
+                _ => false,
+            } {
+                generate_instant = Some(Instant::now());
+                let b = Byte::from_u128(buffer_size).unwrap();
+                println!(
+                    "Generating into memory, size: {buffer_size} Byte ({:#}, {:#})",
+                    b.get_appropriate_unit(UnitType::Binary),
+                    b.get_appropriate_unit(UnitType::Decimal),
+                );
+            };
+            let input: Box<dyn Read> = match generator {
+                Generator::Text => Box::new(AsciiGenerator::new()),
+                Generator::Null => Box::new(NullGenerator::new()),
+                Generator::Random | Generator::RandomText => {
+                    let mut bytes = vec![0; buffer_size_usize];
+                    bytes.fill_with(|| {
+                        rand::thread_rng().gen_range(match generator {
+                            Generator::Random => 0u8..0xff,
+                            Generator::RandomText => 0x20u8..0x7f,
+                            _ => todo!(),
+                        })
+                    });
+                    Box::new(MemoryGenerator::new(bytes, cli.count == 0))
                 }
-                size += s as u128;
+            };
+            if let Some(instant) = generate_instant {
+                let duration = instant.elapsed();
+                println!("Generation duration: {:?}", duration);
+                println!(
+                    "Generation speed: {}",
+                    get_io_speed(buffer_size, duration.as_nanos())
+                );
             }
-            let duration = instant.elapsed();
-            println!("Duration: {duration:?}");
-            let b = Byte::from_u128(size).unwrap();
-            println!(
-                "Total size: {size} Byte ({:#}, {:#})",
-                b.get_appropriate_unit(UnitType::Binary),
-                b.get_appropriate_unit(UnitType::Decimal),
-            );
-            let b = b.as_u128() * 1_000_000_000 / duration.as_nanos();
-            let bit = Bit::from_u128(b * 8).unwrap();
-            let b = Byte::from_u128(b).unwrap();
-            println!(
-                "Speed: {:#.2}/s, {:#.2}/s, {:#.2}/s, {:#.2}/s",
-                b.get_appropriate_unit(UnitType::Binary),
-                b.get_appropriate_unit(UnitType::Decimal),
-                bit.get_appropriate_unit(UnitType::Binary),
-                bit.get_appropriate_unit(UnitType::Decimal),
-            );
+            input
         }
-        Commands::Write { file, src, common } => {
-            todo!()
+    };
+
+    let mut output = cli.output.map(|s| File::create(s).unwrap());
+    let mut buffer = vec![0u8; buffer_size_usize];
+    let mut count = 0usize;
+    let mut size = 0u128;
+    let instant = Instant::now();
+    loop {
+        let s = input.read(&mut buffer).unwrap();
+        if s == 0 {
+            break;
         }
-        Commands::Copy {
-            input,
-            output,
-            common,
-        } => {
-            todo!()
+        if let Some(ref mut output) = output {
+            output.write_all(&buffer).unwrap();
+        }
+        count += 1;
+        size += s as u128;
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+        if cli.count > 0 {
+            let s = final_size - size;
+            if s < buffer_size {
+                buffer = Vec::from(&buffer[0..s as usize]);
+            }
         }
     }
+    let duration = instant.elapsed();
+    println!("RW duration: {duration:?}");
+    let b = Byte::from_u128(size).unwrap();
+    println!("RW count: {count}");
+    println!(
+        "RW size: {size} Byte ({:#}, {:#})",
+        b.get_appropriate_unit(UnitType::Binary),
+        b.get_appropriate_unit(UnitType::Decimal),
+    );
+    println!("RW speed: {}", get_io_speed(b.as_u128(), duration.as_nanos()));
 }

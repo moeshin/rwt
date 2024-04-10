@@ -9,3 +9,5 @@ edition = "2021"
 byte-unit = { version = "5.1.4", features = ["u128", "bit"] }
 clap = { version = "4.5.4", features = ["derive"] }
 clap_complete = "4.5.1"
+ctrlc = "3.4.4"
+rand = "0.8.5"
