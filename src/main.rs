@@ -219,23 +219,24 @@ fn main() {
         None => {
             let generator = cli.generator.unwrap();
             let mut generate_instant = None;
-            if match generator {
-                Generator::Random | Generator::RandomText => true,
-                _ => false,
-            } {
-                generate_instant = Some(Instant::now());
-                let b = Byte::from_u128(buffer_size).unwrap();
-                println!(
-                    "Generating into memory, size: {buffer_size} Byte ({:#}, {:#})",
-                    b.get_appropriate_unit(UnitType::Binary),
-                    b.get_appropriate_unit(UnitType::Decimal),
-                );
+            let generate_size = if cli.count == 0 {
+                buffer_size
+            } else {
+                final_size
             };
             let input: Box<dyn Read> = match generator {
                 Generator::Text => Box::new(AsciiGenerator::new()),
                 Generator::Null => Box::new(NullGenerator::new()),
                 Generator::Random | Generator::RandomText => {
-                    let mut bytes = vec![0; buffer_size_usize];
+                    generate_instant = Some(Instant::now());
+                    let b = Byte::from_u128(generate_size).unwrap();
+                    println!(
+                        "Generating into memory, size: {} Byte ({:#}, {:#})",
+                        generate_size,
+                        b.get_appropriate_unit(UnitType::Binary),
+                        b.get_appropriate_unit(UnitType::Decimal),
+                    );
+                    let mut bytes = vec![0; generate_size as usize];
                     bytes.fill_with(|| {
                         rand::thread_rng().gen_range(match generator {
                             Generator::Random => 0u8..0xff,
@@ -251,7 +252,7 @@ fn main() {
                 println!("Generation duration: {:?}", duration);
                 println!(
                     "Generation speed: {}",
-                    get_io_speed(buffer_size, duration.as_nanos())
+                    get_io_speed(generate_size, duration.as_nanos())
                 );
             }
             input
@@ -292,5 +293,8 @@ fn main() {
         b.get_appropriate_unit(UnitType::Binary),
         b.get_appropriate_unit(UnitType::Decimal),
     );
-    println!("RW speed: {}", get_io_speed(b.as_u128(), duration.as_nanos()));
+    println!(
+        "RW speed: {}",
+        get_io_speed(b.as_u128(), duration.as_nanos())
+    );
 }
