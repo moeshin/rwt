@@ -11,11 +11,7 @@ use std::{
 };
 
 use byte_unit::{Bit, Byte, UnitType};
-use clap::{
-    builder::ValueParser,
-    error::Result,
-    ArgAction, CommandFactory, Parser, ValueEnum,
-};
+use clap::{builder::ValueParser, error::Result, ArgAction, CommandFactory, Parser, ValueEnum};
 use clap_complete::{generate, Shell};
 use rand::Rng;
 
@@ -139,13 +135,45 @@ fn get_io_speed(size: u128, nanos: u128) -> String {
     )
 }
 
+fn time_to_with_unit(t: u128) -> String {
+    struct U(&'static str, u128);
+    const UNITS: [U; 6] = [
+        U("d", 86_400_000_000_000),
+        U("h", 3_600_000_000_000),
+        U("min", 60_000_000_000),
+        U("s", 1_000_000_000),
+        U("ms", 1_000_000),
+        U("μs", 1_000),
+    ];
+    let mut i = t;
+    let mut f = 0;
+    let mut s = "ns";
+    for u in UNITS {
+        let p = u.1 / 1000;
+        if t < u.1 - 5 * p {
+            continue;
+        }
+        let t = t / p;
+        i = t / 1000;
+        f = if t % 10 > 4 {
+            i += 1;
+            0
+        } else {
+            t % 1000 / 10
+        };
+        s = u.0;
+        break;
+    }
+    format!("{}.{:02} {}", i, f, s)
+}
+
 #[derive(Parser, Debug, PartialEq)]
 #[command(
     version,
     about,
     long_about,
     next_line_help = true,
-    disable_version_flag = true,
+    disable_version_flag = true
 )]
 struct Cli {
     #[arg(short, long, help = "Input file")]
@@ -271,11 +299,15 @@ fn main() {
                 }
             };
             if let Some(instant) = generate_instant {
-                let duration = instant.elapsed();
-                println!("Generation duration: {:?}", duration);
+                let duration = instant.elapsed().as_nanos();
+                println!(
+                    "Generation duration: {} ns ({})",
+                    duration,
+                    time_to_with_unit(duration)
+                );
                 println!(
                     "Generation speed: {}",
-                    get_io_speed(generate_size, duration.as_nanos())
+                    get_io_speed(generate_size, duration)
                 );
             }
             input
@@ -307,8 +339,12 @@ fn main() {
             }
         }
     }
-    let duration = instant.elapsed();
-    println!("RW duration: {duration:?}");
+    let duration = instant.elapsed().as_nanos();
+    println!(
+        "RW duration: {} ns ({})",
+        duration,
+        time_to_with_unit(duration)
+    );
     let b = Byte::from_u128(size).unwrap();
     println!("RW count: {count}");
     println!(
@@ -316,8 +352,5 @@ fn main() {
         b.get_appropriate_unit(UnitType::Binary),
         b.get_appropriate_unit(UnitType::Decimal),
     );
-    println!(
-        "RW speed: {}",
-        get_io_speed(b.as_u128(), duration.as_nanos())
-    );
+    println!("RW speed: {}", get_io_speed(b.as_u128(), duration));
 }
