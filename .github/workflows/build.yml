@@ -68,8 +68,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - run: rustup -Vv
       - run: cargo -Vv
+      - run: rustc -Vv
+      - run: rustup -Vv
       - run: rustup toolchain list
 
       - name: Apt install
